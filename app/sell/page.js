@@ -1,8 +1,20 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-// หมายเหตุ: ไฟล์นี้อยู่ลึกกว่า app/page.js หนึ่งชั้น จึงต้องใช้ ../../
 import { supabase } from '../../lib/supabaseClient';
+
+// [ใหม่] ส่งข้อมูลไปให้ API route ยิง Telegram ถ้าพังจะไม่กระทบการขาย
+async function notifyTelegram(payload) {
+  try {
+    await fetch('/api/notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    console.error('Telegram notify failed:', err);
+  }
+}
 
 export default function SellPage() {
   const [products, setProducts] = useState([]);
@@ -10,9 +22,8 @@ export default function SellPage() {
   const [quantity, setQuantity] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState(null); // { type: 'success' | 'error', text }
+  const [message, setMessage] = useState(null);
 
-  // ดึงรายการสินค้า
   async function fetchProducts() {
     const { data, error } = await supabase
       .from('products')
@@ -31,7 +42,6 @@ export default function SellPage() {
     fetchProducts();
   }, []);
 
-  // สินค้าที่เลือกอยู่ และยอดรวมที่คำนวณอัตโนมัติ
   const selected = products.find((p) => p.id === productId);
   const qty = parseInt(quantity, 10);
   const total = selected && qty > 0 ? Number(selected.price) * qty : 0;
@@ -51,7 +61,6 @@ export default function SellPage() {
 
     setSubmitting(true);
 
-    // 1) ดึง stock ล่าสุดจากฐานข้อมูลอีกครั้ง กันกรณีข้อมูลบนหน้าจอเก่า
     const { data: fresh, error: freshError } = await supabase
       .from('products')
       .select('id, name, price, stock')
@@ -64,7 +73,6 @@ export default function SellPage() {
       return;
     }
 
-    // 2) ตรวจว่าสต็อกพอหรือไม่
     if (fresh.stock < qty) {
       setMessage({
         type: 'error',
@@ -75,7 +83,6 @@ export default function SellPage() {
       return;
     }
 
-    // 3) ตัดสต็อก (มีเงื่อนไข .eq('stock', ...) กันกรณีมีคนขายพร้อมกัน)
     const { data: updated, error: updateError } = await supabase
       .from('products')
       .update({ stock: fresh.stock - qty })
@@ -93,7 +100,6 @@ export default function SellPage() {
       return;
     }
 
-    // 4) บันทึกรายการขายลงตาราง sales
     const { error: insertError } = await supabase.from('sales').insert([
       {
         product_id: fresh.id,
@@ -105,7 +111,6 @@ export default function SellPage() {
     ]);
 
     if (insertError) {
-      // บันทึกไม่สำเร็จ: คืนสต็อกกลับ
       await supabase.from('products').update({ stock: fresh.stock }).eq('id', fresh.id);
       setMessage({ type: 'error', text: 'บันทึกการขายไม่สำเร็จ: ' + insertError.message });
       setSubmitting(false);
@@ -113,7 +118,14 @@ export default function SellPage() {
       return;
     }
 
-    // 5) สำเร็จ: แจ้งผล รีเซ็ตฟอร์ม โหลดสต็อกใหม่
+    // [ใหม่] ขายสำเร็จแล้ว ส่งแจ้งเตือน Telegram (ไม่ await เพื่อไม่ให้หน้าเว็บช้า)
+    notifyTelegram({
+      productName: fresh.name,
+      quantity: qty,
+      totalPrice: Number(fresh.price) * qty,
+      stockAfter: fresh.stock - qty,
+    });
+
     setMessage({
       type: 'success',
       text: `ขายสำเร็จ: ${fresh.name} x ${qty} รวม ${(Number(fresh.price) * qty).toLocaleString('th-TH')} บาท`,
@@ -164,7 +176,6 @@ export default function SellPage() {
             />
           </div>
 
-          {/* ยอดรวมอัตโนมัติ */}
           <div style={styles.total}>
             ยอดรวม: <strong>{total.toLocaleString('th-TH')}</strong> บาท
           </div>
